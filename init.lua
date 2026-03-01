@@ -90,6 +90,73 @@ P.S. You can delete this when you're done too. It's your config now! :)
 vim.g.mapleader = ' '
 vim.g.maplocalleader = ' '
 
+vim.api.nvim_create_autocmd('LspAttach', {
+  group = vim.api.nvim_create_augroup('pyright-tuning', { clear = true }),
+  callback = function(args)
+    local client = vim.lsp.get_client_by_id(args.data.client_id)
+    if not client or client.name ~= 'pyright' then
+      return
+    end
+
+    -- Toggle presets here:
+    --   'gui_light'    : best for PyQt/PySide GUI apps (hides Qt stub noise + Optional None noise)
+    --   'django_light' : good starter for Django (keeps Optional checks on)
+    --   'medium'       : feeling confident, mostly just hides private import nagging
+    --   'strict'       : show me everything, hides nothing
+    local preset = 'gui_light'
+
+    local presets = {
+      gui_light = {
+        reportOptionalMemberAccess = true,
+        reportOptionalCall = true,
+        reportAttributeAccessIssue = true, -- Qt enums/palette/winreg stubs noise
+        reportPrivateImportUsage = true, -- matplotlib backend exports, etc.
+      },
+
+      django_light = {
+        -- In web apps, Optional/None checks catch lots of real bugs, so keep them ON.
+        reportAttributeAccessIssue = true, -- can still be noisy depending on libs
+        reportPrivateImportUsage = true,
+      },
+
+      medium = {
+        reportPrivateImportUsage = true,
+        -- keep Optional + Attribute issues visible
+      },
+
+      strict = {
+        -- hide nothing
+      },
+    }
+
+    local hide = presets[preset] or presets.gui_light
+
+    -- Filter selected Pyright diagnostics (editor-side, per-client)
+    local orig = client.handlers['textDocument/publishDiagnostics'] or vim.lsp.handlers['textDocument/publishDiagnostics']
+
+    client.handlers['textDocument/publishDiagnostics'] = function(err, result, ctx, config)
+      if result and result.diagnostics then
+        local filtered = {}
+        for _, d in ipairs(result.diagnostics) do
+          local code = d.code
+          if type(code) == 'table' then
+            code = code.value
+          end
+
+          if not (code and hide[tostring(code)]) then
+            table.insert(filtered, d)
+          end
+        end
+        result.diagnostics = filtered
+      end
+      return orig(err, result, ctx, config)
+    end
+
+    -- Confirm it ran + which preset is active (view with :messages)
+    vim.api.nvim_echo({ { ('pyright diagnostics filter active (preset: %s)'):format(preset), 'WarningMsg' } }, true, {})
+  end,
+})
+
 -- Set to true if you have a Nerd Font installed and selected in the terminal
 --vim.g.have_nerd_font = false
 vim.g.have_nerd_font = true
@@ -661,6 +728,9 @@ require('lazy').setup({
       --  When you add blink.cmp, luasnip, etc. Neovim now has *more* capabilities.
       --  So, we create new capabilities with blink.cmp, and then broadcast that to the servers.
       local capabilities = require('blink.cmp').get_lsp_capabilities()
+      -- I commented out the next 2 lines because they were failing when I ran nvim
+      -- local capabilities = vim.lsp.protocol.make_client_capabilities()
+      -- capabilities = vim.tbl_deep_extend('force', capabilities, require('cmp_nvim_lsp').default_capabilities())
 
       -- Enable the following language servers
       --  Feel free to add/remove any LSPs that you want here. They will automatically be installed.
@@ -675,6 +745,55 @@ require('lazy').setup({
         -- clangd = {},
         -- gopls = {},
         -- pyright = {},
+        --
+        -- pyright = {
+        --   settings = {
+        --     python = {
+        --       analysis = {
+        --         -- Pick your vibe:
+        --         -- "off"   = least noisy
+        --         -- "basic" = good default
+        --         -- "strict"= spicy
+        --         typeCheckingMode = 'off', -- used to be 'basic' [basic/off]
+        --
+        --         -- This reduces noise in big repos:
+        --         diagnosticMode = 'openFilesOnly',
+        --
+        --         autoSearchPaths = true,
+        --         useLibraryCodeForTypes = true,
+        --       },
+        --     },
+        --   },
+        -- },
+
+        pyright = {
+          settings = {
+            python = {
+              analysis = {
+                -- lighter checking
+                typeCheckingMode = 'off',
+
+                -- and specifically silence the “attribute on/of None” style noise
+                diagnosticSeverityOverrides = {
+                  reportOptionalMemberAccess = 'none',
+                  reportOptionalCall = 'none',
+                },
+
+                -- keep your existing prefs
+                diagnosticMode = 'openFilesOnly',
+                autoSearchPaths = true,
+                useLibraryCodeForTypes = true,
+              },
+            },
+          },
+
+          -- debug: confirm this pyright config is actually being used
+          on_attach = function()
+            -- this shows in the command area and is visible via :messages
+            vim.api.nvim_echo({ { 'pyright on_attach ran', 'WarningMsg' } }, true, {})
+          end,
+        },
+
         -- rust_analyzer = {},
         -- ... etc. See `:help lspconfig-all` for a list of all the pre-configured LSPs
         --
@@ -726,10 +845,33 @@ require('lazy').setup({
         handlers = {
           function(server_name)
             local server = servers[server_name] or {}
-            -- This handles overriding only values explicitly passed
-            -- by the server configuration above. Useful when disabling
-            -- certain features of an LSP (for example, turning off formatting for ts_ls)
             server.capabilities = vim.tbl_deep_extend('force', {}, capabilities, server.capabilities or {})
+
+            if server_name == 'pyright' then
+              server.settings = vim.tbl_deep_extend('force', server.settings or {}, {
+                python = {
+                  analysis = {
+                    typeCheckingMode = 'off',
+                    diagnosticMode = 'openFilesOnly',
+                    autoSearchPaths = true,
+                    useLibraryCodeForTypes = true,
+                    diagnosticSeverityOverrides = {
+                      reportOptionalMemberAccess = 'none',
+                      reportOptionalCall = 'none',
+                    },
+                  },
+                },
+              })
+
+              local user_on_attach = server.on_attach
+              server.on_attach = function(client, bufnr)
+                if user_on_attach then
+                  pcall(user_on_attach, client, bufnr)
+                end
+                vim.api.nvim_echo({ { 'pyright on_attach ran', 'WarningMsg' } }, true, {})
+              end
+            end
+
             require('lspconfig')[server_name].setup(server)
           end,
         },

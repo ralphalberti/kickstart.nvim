@@ -1,0 +1,14 @@
+I should try to figure out these lines someday
+I commented one line out to try others.
+It may be the reason I was having such a hard time with pyright.
+
+-- LSP servers and clients are able to communicate to each other what features they support.
+-- By default, Neovim doesn't support everything that is in the LSP specification.
+-- When you add blink.cmp, luasnip, etc. Neovim now has *more* capabilities.
+-- So, we create new capabilities with blink.cmp, and then broadcast that to the servers.
+
+-- I commented out the next line because I wanted to try the two lines following it
+-- local capabilities = require('blink.cmp').get_lsp_capabilities()
+local capabilities = vim.lsp.protocol.make_client_capabilities()
+capabilities = vim.tbl_deep_extend('force', capabilities, require('cmp_nvim_lsp').default_capabilities())
+
